@@ -29,11 +29,15 @@ find_library(QTKEYCHAIN_LIBRARY
                ${CMAKE_INSTALL_PREFIX}/lib
             )
 
+set(openssling_src
+    main.cpp
+    wordlist.cpp)
+
 include_directories(${OPENSSL_INCLUDE_DIR})
 list(APPEND openssling_LIBRARIES ${OPENSSL_LIBRARIES})
 
 include_directories(${QTKEYCHAIN_INCLUDE_DIR})
 list(APPEND openssling_LIBRARIES ${QTKEYCHAIN_LIBRARY})
 
-add_executable(${PROJECT_NAME} "main.cpp")
+add_executable(${PROJECT_NAME} ${openssling_src})
 target_link_libraries(${PROJECT_NAME} Qt5::Core Qt5::Network ${OPENSSL_LIBRARIES} ${QTKEYCHAIN_LIBRARY})

@@ -1,4 +1,10 @@
 #include <iostream>
+#include <fstream>
+#include <string>
+#include <sstream>
+
+#include <openssl/conf.h>
+#include <openssl/err.h>
 #include <openssl/rsa.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -7,9 +13,10 @@
 #include <keychain.h>
 
 #include <QDebug>
-
 #include <QSslCertificate>
 #include <QSslKey>
+
+#include "wordlist.h"
 
 using namespace std;
 
@@ -146,6 +153,7 @@ QByteArray privateKeyToPem(const QSslKey key) {
     BIO *privateKeyBio = BIO_new(BIO_s_mem());
     QByteArray privateKeyPem = key.toPem();
     BIO_write(privateKeyBio, privateKeyPem.constData(), privateKeyPem.size());
+
     EVP_PKEY *pkey = PEM_read_bio_PrivateKey(privateKeyBio, NULL, NULL, NULL);
 
     BIO *pemBio = BIO_new(BIO_s_mem());
@@ -158,22 +166,90 @@ QByteArray privateKeyToPem(const QSslKey key) {
 
     return pem;
 }
+
+QSslKey generateKeyPair()
+{
+    // AES/GCM/NoPadding,
+    // metadataKeys with RSA/ECB/OAEPWithSHA-256AndMGF1Padding
+    qDebug() << "No public key, generating a pair.";
+    const int rsaKeyLen = 2048;
+
+    EVP_PKEY *localKeyPair = nullptr;
+
+    // Init RSA
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+
+    if(EVP_PKEY_keygen_init(ctx) <= 0) {
+        qDebug() << "Couldn't initialize the key generator";
+        return QSslKey();
+    }
+
+    if(EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, rsaKeyLen) <= 0) {
+        qDebug() << "Couldn't initialize the key generator bits";
+        return QSslKey();
+    }
+
+    if(EVP_PKEY_keygen(ctx, &localKeyPair) <= 0) {
+        qDebug() << "Could not generate the key";
+        return QSslKey();
+    }
+    EVP_PKEY_CTX_free(ctx);
+    qDebug() << "Key correctly generated";
+    qDebug() << "Storing keys locally";
+
+    BIO *privKey = BIO_new(BIO_s_mem());
+    if (PEM_write_bio_PrivateKey(privKey, localKeyPair, NULL, NULL, 0, NULL, NULL) <= 0) {
+        qDebug() << "Could not read private key from bio.";
+        return QSslKey();
+    }
+    QByteArray key = BIO2ByteArray(privKey);
+    QSslKey privateKey = QSslKey(key, QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey);
+
+    qDebug() << "Keys generated correctly, sending to server.";
+    //generateCSR(localKeyPair);
+
+    return privateKey;
+}
 }
 
 int main()
 {
-    cout << "Hello World!" << endl;
+    cout << "OpenSSLing!!" << endl;
+
+    /* Initialise the library */
+    ERR_load_crypto_strings();
+    OpenSSL_add_all_algorithms();
+    OPENSSL_config(NULL);
+
+//    std::ifstream pkfile;
+//    pkfile.open("privatekey.pem");
+//    std::stringstream pkbuffer;
+//    pkbuffer << pkfile.rdbuf();
+
+    //the first time the user login in a client, it generates a private and private key
+    // the private key is encrypted with a mnemonic
+    // it upsloads both to the server
 
     //generate key
-    const char privatekey[] = "MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDsn0JKS/THu328z1IgN0VzYU53HjSX03WJIgWkmyTaxbiKpoJaKbksXmfSpgzVGzKFvGfZ03fwFrN7Q8P8R2e8SNiell7mh1TDw9/0P7Bt/ER8PJrXORo+GviKHxaLr7Y0BJX9i/nW/L0L/VaE8CZTAqYBdcSJGgHJjY4UMf892ZPTa9T2Dl3ggdMZ7BQ2kiCiCC3qV99b0igRJGmmLQaGiAflhFzuDQPMifUMq75wI8RSRPdxUAtjTfkl68QHu7Umyeyy33OQgdUKaTl5zcS3VSQbNjveVCNM4RDH1RlEc+7Wf1BY8APqT6jbiBcROJD2CeoLH2eiIJCi+61ZkSGfAgMBAAECggEBALFStCHrhBf+GL9a+qer4/8QZ/X6i91PmaBX/7SYk2jjjWVSXRNmex+V6+Y/jBRT2mvAgm8J+7LPwFdatE+lz0aZrMRD2gCWYF6Itpda90OlLkmQPVWWtGTgX2ta2tF5r2iSGzk0IdoL8zw98Q2UzpOcw30KnWtFMxuxWk0mHqpgp00g80cDWg3+RPbWOhdLp5bflQ36fKDfmjq05cGlIk6unnVyC5HXpvh4d4k2EWlXrjGsndVBPCjGkZePlLRgDHxT06r+5XdJ+1CBDZgCsmjGz3M8uOHyCfVW0WhB7ynzDTagVgz0iqpuhAi9sPt6iWWwpAnRw8cQgqEKw9bvKKECgYEA/WPi2PJtL6u/xlysh/H7A717CId6fPHCMDace39ZNtzUzc0nT5BemlcF0wZ74NeJSur3Q395YzB+eBMLs5p8mA95wgGvJhM65/J+HX+k9kt6Z556zLMvtG+j1yo4D0VEwm3xahB4SUUP+1kD7dNvo4+8xeSCyjzNllvYZZC0DrECgYEA7w8pEqhHHn0a+twkPCZJS+gQTB9Rm+FBNGJqB3XpWsTeLUxYRbVGk0iDve+eeeZ41drxcdyWP+WcL34hnrjgI1Fo4mK88saajpwUIYMy6+qMLY+jC2NRSBox56eH7nsVYvQQK9eKqv9wbB+PF9SwOIvuETN7fd8mAY02UnoaaU8CgYBoHRKocXPLkpZJuuppMVQiRUi4SHJbxDo19Tp2w+y0TihiJ1lvp7I3WGpcOt3LlMQktEbExSvrRZGxZKH6Og/XqwQsYuTEkEIz679F/5yYVosE6GkskrOXQAfh8Mb3/04xVVtMaVgDQw0+CWVD4wyL+BNofGwBDNqsXTCdCsfxAQKBgQCDv2EtbRw0y1HRKv21QIxoju5cZW4+cDfVPN+eWPdQFOs1H7wOPsc0aGRiiupV2BSEF3O1ApKziEE5U1QH+29bR4R8L1pemeGX8qCNj5bCubKjcWOz5PpouDcEqimZ3q98p3E6GEHN15UHoaTkx0yO/V8oj6zhQ9fYRxDHB5ACtQKBgQCOO7TJUO1IaLTjcrwS4oCfJyRnAdz49L1AbVJkIBK0fhJLecOFu3ZlQl/RStQb69QKb5MNOIMmQhg8WOxZxHcpmIDbkDAm/J/ovJXFSoBdOr5ouQsYsDZhsWW97zvLMzg5pH9/3/1BNz5q3Vu4HgfBSwWGt4E2NENj+XA+QAVmGA==";
-    const char key[] = "YXbFCAnfUsMZMizGs7rTeg==";
-    const char mnemonic[] = "mnemonic";
+    //const char privatekey[] = "MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDsn0JKS/THu328z1IgN0VzYU53HjSX03WJIgWkmyTaxbiKpoJaKbksXmfSpgzVGzKFvGfZ03fwFrN7Q8P8R2e8SNiell7mh1TDw9/0P7Bt/ER8PJrXORo+GviKHxaLr7Y0BJX9i/nW/L0L/VaE8CZTAqYBdcSJGgHJjY4UMf892ZPTa9T2Dl3ggdMZ7BQ2kiCiCC3qV99b0igRJGmmLQaGiAflhFzuDQPMifUMq75wI8RSRPdxUAtjTfkl68QHu7Umyeyy33OQgdUKaTl5zcS3VSQbNjveVCNM4RDH1RlEc+7Wf1BY8APqT6jbiBcROJD2CeoLH2eiIJCi+61ZkSGfAgMBAAECggEBALFStCHrhBf+GL9a+qer4/8QZ/X6i91PmaBX/7SYk2jjjWVSXRNmex+V6+Y/jBRT2mvAgm8J+7LPwFdatE+lz0aZrMRD2gCWYF6Itpda90OlLkmQPVWWtGTgX2ta2tF5r2iSGzk0IdoL8zw98Q2UzpOcw30KnWtFMxuxWk0mHqpgp00g80cDWg3+RPbWOhdLp5bflQ36fKDfmjq05cGlIk6unnVyC5HXpvh4d4k2EWlXrjGsndVBPCjGkZePlLRgDHxT06r+5XdJ+1CBDZgCsmjGz3M8uOHyCfVW0WhB7ynzDTagVgz0iqpuhAi9sPt6iWWwpAnRw8cQgqEKw9bvKKECgYEA/WPi2PJtL6u/xlysh/H7A717CId6fPHCMDace39ZNtzUzc0nT5BemlcF0wZ74NeJSur3Q395YzB+eBMLs5p8mA95wgGvJhM65/J+HX+k9kt6Z556zLMvtG+j1yo4D0VEwm3xahB4SUUP+1kD7dNvo4+8xeSCyjzNllvYZZC0DrECgYEA7w8pEqhHHn0a+twkPCZJS+gQTB9Rm+FBNGJqB3XpWsTeLUxYRbVGk0iDve+eeeZ41drxcdyWP+WcL34hnrjgI1Fo4mK88saajpwUIYMy6+qMLY+jC2NRSBox56eH7nsVYvQQK9eKqv9wbB+PF9SwOIvuETN7fd8mAY02UnoaaU8CgYBoHRKocXPLkpZJuuppMVQiRUi4SHJbxDo19Tp2w+y0TihiJ1lvp7I3WGpcOt3LlMQktEbExSvrRZGxZKH6Og/XqwQsYuTEkEIz679F/5yYVosE6GkskrOXQAfh8Mb3/04xVVtMaVgDQw0+CWVD4wyL+BNofGwBDNqsXTCdCsfxAQKBgQCDv2EtbRw0y1HRKv21QIxoju5cZW4+cDfVPN+eWPdQFOs1H7wOPsc0aGRiiupV2BSEF3O1ApKziEE5U1QH+29bR4R8L1pemeGX8qCNj5bCubKjcWOz5PpouDcEqimZ3q98p3E6GEHN15UHoaTkx0yO/V8oj6zhQ9fYRxDHB5ACtQKBgQCOO7TJUO1IaLTjcrwS4oCfJyRnAdz49L1AbVJkIBK0fhJLecOFu3ZlQl/RStQb69QKb5MNOIMmQhg8WOxZxHcpmIDbkDAm/J/ovJXFSoBdOr5ouQsYsDZhsWW97zvLMzg5pH9/3/1BNz5q3Vu4HgfBSwWGt4E2NENj+XA+QAVmGA==";
+    //const char key[] = "YXbFCAnfUsMZMizGs7rTeg==";
+    //const char key[] = " ";
+    //const char mnemonic[] = "mnemonic";
 
-    QSslKey _privateKey = QSslKey(privatekey, QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey);
+    //QSslKey _privateKey = QSslKey(pkbuffer.str().data(), QSsl::Rsa, QSsl::Pem, QSsl::PrivateKey);
+
+    QStringList list = WordList::getRandomWords(12);
+    QString mnemonic = list.join(' ');
+    qDebug() << "mnemonic Generated:" << mnemonic;
+
+    QString passPhrase = list.join(QString()).toLower();
+    qDebug() << "Passphrase Generated:" << passPhrase;
+    QSslKey _privateKey = Encrypting::generateKeyPair();
 
     auto salt = Encrypting::generateRandom(40);
-    auto secretKey = Encrypting::generatePassword(key, salt);
-    auto cryptedText = Encrypting::encryptPrivateKey(secretKey, Encrypting::privateKeyToPem(_privateKey), salt);
+    auto secretKey = Encrypting::generatePassword(mnemonic, salt);
+    QByteArray pemformat(Encrypting::privateKeyToPem(_privateKey));
+    auto cryptedText = Encrypting::encryptPrivateKey(secretKey, pemformat, salt);
 
     qDebug() << "Crypted text: " << cryptedText;
 
